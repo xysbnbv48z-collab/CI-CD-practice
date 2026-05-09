@@ -4,6 +4,7 @@ import joblib
 
 # Load training data
 data = pd.read_csv("training_data.csv")
+data = data.dropna()
 X = data.iloc[:, :-1]
 y = data.iloc[:, -1]
 
