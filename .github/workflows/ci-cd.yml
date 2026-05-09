@@ -1,0 +1,87 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # 必须开启写入权限，否则 Actions 无法帮你创建 Release 或推送代码
+    permissions:
+      contents: write
+
+    steps:
+      # 1. 拉取代码
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      # 2. 安装 Python 环境
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      # 3. 安装机器学习依赖库
+      - name: Install dependencies
+        run: |
+          pip install pandas scikit-learn joblib
+
+      # 4. 检查数据是否有更新（核心逻辑）
+      - name: Check for changes in training_data.csv
+        id: check_changes
+        run: |
+          # 比较当前提交和上一次提交，看 training_data.csv 是否在变化列表中
+          if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep 'training_data.csv'; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      # 5. 只有数据变了才训练模型
+      - name: Train Linear Model
+        if: steps.check_changes.outputs.changed == 'true'
+        run: python train_model.py
+
+      # 6. 将生成的模型文件推送到 release 分支
+      - name: Push to Release Branch
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add linear_model.txt
+          git commit -m "Update model from Action"
+          git checkout --orphan temp_release
+          git rm -rf .
+          git checkout main -- linear_model.txt
+          git add linear_model.txt
+          git commit -m "Model artifact"
+          git push -f origin temp_release:release
+
+      # 7. 自动创建 GitHub Release 发布版本
+      - name: Create Release
+        if: steps.check_changes.outputs.changed == 'true'
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: Release v${{ github.run_number }}
+          body: "机器学习模型自动更新发布。"
+
+      # 8. 上传模型文件到 Release 附件
+      - name: Upload Asset
+        if: steps.check_changes.outputs.changed == 'true'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./linear_model.txt
+          asset_name: linear_model.txt
+          asset_content_type: text/plain
